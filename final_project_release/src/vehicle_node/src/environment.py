@@ -26,7 +26,7 @@ from std_msgs.msg import Float32, Float64, Header, ColorRGBA, UInt8, String, Flo
 
 # 시뮬레이션 환경을 관리하는 클래스
 class Environments(object):
-    def __init__(self, course_idx, dt=0.1, min_num_agent=8):
+    def __init__(self, course_idx, dt=0.1, min_num_agent=10):
         # 생성자: 초기 상태 설정
         self.spawn_id = 0 # 생성될 에이전트의 ID를 0에서 시작
         self.vehicles = {} # 에이전트들을 저장할 딕셔너리
@@ -41,6 +41,10 @@ class Environments(object):
         self.max_data_points = 5  # 각 객체별로 유지할 최대 데이터 포인트 수, 0.1초 간격으로 5개
 
         self.window_size = 2  # 이동 평균 필터의 윈도우 크기
+
+        self.last_distance_to_nearest = float('inf') # 이전 단계에서의 차량과의 최소 거리
+        self.distance_change_threshold = 0.2  # 거리 변화 판단 임계값
+        self.stop_count = 0  # 거리 변화가 없을 때의 카운트
 
         self.initialize() # 초기화 함수 호출
 
@@ -229,38 +233,47 @@ class Environments(object):
 
                 """
                 absolute_sensor_info = self.relative_to_absolute(self.vehicles[id_], sensor_info) # [ obj id, abs x, abs y, rel h, rel vx, rel vy, angle_to_obj ]
-                # print("상대적", sensor_info)
-                # print("절대적", absolute_sensor_info)
 
                 self.update_sensor_data(absolute_sensor_info)
 
-                # print("----------\nData count per object ID:")
-                # for obj_id in self.object_data.keys():
-                #     data_list = self.object_data[obj_id]
-                #     print(f"object Id {obj_id}, len : {len(data_list)}\n")
-                #     # 가장 최신 데이터, 즉 가장 마지막 데이터를 활용
-                #     print(f"Latest data: {data_list[-1]}\n")
-                # print("----------")
-
-                deceleration_distance = 8
-                distance_to_nearest = float('inf')
-
                 # 전방 각도 사이의 차량과의 가장 가까운 거리 계산
+                distance_to_nearest = float('inf')
+                # print("-"*30)
                 for obj_id in self.object_data.keys():
                     latest_data = self.object_data[obj_id][-1]
-                    # print(f"object ID {obj_id}의 각도 : {latest_data[6]}")
-                    if latest_data[6] <= 28 * (np.pi / 180) and latest_data[6] >= -28 * (np.pi / 180):
+
+                    if latest_data[6] <= 27 * (np.pi / 180) and latest_data[6] >= -27 * (np.pi / 180):
                         distance = np.sqrt((self.vehicles[id_].x - latest_data[1])**2 + (self.vehicles[id_].y - latest_data[2])**2)
+                        # print(f"object ID {obj_id}와의 거리 : {distance}")
                         if distance < distance_to_nearest:
                             distance_to_nearest = distance
+                # print("-"*30, "\n")
+
+                # 현재 속도를 기준으로 감속 계수 및 거리 계산
+                current_speed = self.vehicles[id_].v
+                deceleration_factor = -np.clip(current_speed, 0.3, 5.0)
+                deceleration_distance = np.clip(current_speed*3, 10, 15)
 
                 if distance_to_nearest < deceleration_distance:
-                    print("Break")
-                    self.vehicles[id_].step_manual(ax=-3.5, steer=0)
+                    # 거리 변화 감지 및 처리
+                    if abs(distance_to_nearest - self.last_distance_to_nearest) <= self.distance_change_threshold:
+                        print("Count")
+                        self.stop_count += 1
+                    else:
+                        self.stop_count = 0  # 거리 변화가 감지되면 카운트 리셋
+
+                    if self.stop_count >= 3: # 3회 호출동안 거리 변화가 거의 없으면 서서히 움직임 시작
+                        print("Slow")
+                        self.vehicles[id_].step_manual(ax=1.0, steer=0)
+                    else:
+                        print("Break")
+                        self.vehicles[id_].step_manual(ax=deceleration_factor, steer=0)
                 else:
                     print("Go")
                     self.vehicles[id_].step_manual(ax=0.5, steer=0)
+                    self.stop_count = 0
 
+                self.last_distance_to_nearest = distance_to_nearest
             if id_  > 0 :
                 # 나머지 에이전트에 대해 자동 제어 단계를 실행
                 self.vehicles[id_].step_auto(self.vehicles, self.int_pt_list[id_])
