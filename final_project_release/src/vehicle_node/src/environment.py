@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-#-*- coding:utf-8 -*-
+# -*- coding:utf-8 -*-
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,6 +13,8 @@ import matplotlib.animation as animation
 from IPython.display import HTML
 from utils import *
 from agent import agent
+# from kalman_filter import *
+# from imm_filter import *
 
 
 import tf
@@ -23,36 +25,35 @@ from geometry_msgs.msg import Twist, Point32, PolygonStamped, Polygon, Vector3, 
 from visualization_msgs.msg import MarkerArray, Marker
 
 from std_msgs.msg import Float32, Float64, Header, ColorRGBA, UInt8, String, Float32MultiArray, Int32MultiArray
+from object_tracker import *
 
-# 시뮬레이션 환경을 관리하는 클래스
 class Environments(object):
-    def __init__(self, course_idx, dt=0.1, min_num_agent=10):
-        # 생성자: 초기 상태 설정
-        self.spawn_id = 0 # 생성될 에이전트의 ID를 0에서 시작
-        self.vehicles = {} # 에이전트들을 저장할 딕셔너리
-        self.int_pt_list = {} # 각 에이전트별 교차점 정보를 저장할 딕셔너리
-        self.min_num_agent = min_num_agent # 환경 내에서 유지되어야하는 최소 에이전트 수
-        self.dt = dt # 시뮬레이션의 시간 단계 (초)
-        self.course_idx = course_idx # 사용할 코스의 인덱스
+    def __init__(self, course_idx, dt=0.1, min_num_agent=8, num_kalman_data=10, t_pred=2.0):
 
-        self.object_data = {}  # 객체별 센서 데이터 이력 저장
-        self.object_recent_count = {}  # 각 객체의 최근 관측 카운트
-        self.recent_count_threshold = 2  # 객체 데이터 삭제 전 허용되는 최대 미관측 횟수
-        self.max_data_points = 5  # 각 객체별로 유지할 최대 데이터 포인트 수, 0.1초 간격으로 5개
+        self.spawn_id = 0
+        self.vehicles = {}
+        self.int_pt_list = {}
+        self.sensor_info_dict = {}
+        self.kalman_filter_dict = {}
+        self.kf_pred_dict = {}
+        self.model_pred_dict = {}
+        self.min_num_agent = min_num_agent
+        self.dt = dt
+        self.course_idx = course_idx
+        self.num_kalman_data = num_kalman_data
+        self.t_pred = t_pred
+        self.check_intersection_distance = 20
+        self.curvature_speed_factor = 0.01
+        self.k_p = 5.0
+        self.v_max = 8.0
 
-        self.window_size = 2  # 이동 평균 필터의 윈도우 크기
+        self.tracker = MultiDynamicObstacleTracker(dt=0.1, T=2, timeout=1)
 
-        self.last_distance_to_nearest = float('inf') # 이전 단계에서의 차량과의 최소 거리
-        self.distance_change_threshold = 0.2  # 거리 변화 판단 임계값
-        self.stop_count = 0  # 거리 변화가 없을 때의 카운트
+        self.initialize()
 
-        self.initialize() # 초기화 함수 호출
-
-    # 환경 초기화 함수
     def initialize(self, init_num=6):
-        # 일시 정지 상태를 False로 설정
+
         self.pause = False
-        # ROS 파라미터 서버에서 파일 경로 읽기
         filepath = rospy.get_param("file_path")
         Filelist = glob.glob(filepath+"/*info.pickle")
 
@@ -61,231 +62,220 @@ class Environments(object):
         with open(file, "rb") as f:
             Data = pickle.load(f)
 
-        # 데이터에서 맵 포인트와 연결 정보 추출
         self.map_pt = Data["Map"]
         self.connectivity = Data["AS"]
 
-        # 지정된 초기 에이전트 수만큼 에이전트 생성
         for i in range(init_num):
-            if i==0:
-                # 첫 번째 에이전트는 특정 코스에 생성
-                CourseList = [[4,1,18], [4,2,25], [4,0,11]]
-                self.spawn_agent(target_path = CourseList[self.course_idx], init_v = 0)
+            if i == 0:
+                CourseList = [[4, 1, 18], [4, 2, 25], [4, 0, 11]]
+                self.spawn_agent(
+                    target_path=CourseList[self.course_idx], init_v=0)
             else:
-                # 나머지는 무작위 위치에 생성
                 self.spawn_agent()
 
-    # 새 에이전트를 생성하는 함수
-    def spawn_agent(self, target_path=[], init_v = None):
-        # 초기 점유 상태는 True로 설정
+    def spawn_agent(self, target_path=[], init_v=None):
+
         is_occupied = True
 
         if target_path:
-            # target_path가 지정된 경우, 초기 점유 상태를 False로 설정
+
             spawn_cand_lane = target_path[0]
             is_occupied = False
-            s_st = 5 # 시작 s 좌표 설정
+            s_st = 5
+
         else:
-            # target_path가 지정되지 않은 경우, 무작위 레인 선택
-            spawn_cand_lane = [10,12,24,17,19]
-            s_st = np.random.randint(0,20)
+            spawn_cand_lane = [10, 12, 24, 17, 19]
+
+            s_st = np.random.randint(0, 20)
             max_cnt = 10
-            while(is_occupied and max_cnt>0):
+            while (is_occupied and max_cnt > 0):
+
                 spawn_lane = np.random.choice(spawn_cand_lane)
+
                 is_occupied = False
                 for id_ in self.vehicles.keys():
                     if (self.vehicles[id_].lane_st == spawn_lane) and np.abs(self.vehicles[id_].s - s_st) < 25:
                         is_occupied = True
-                max_cnt-=1
 
-        # 점유되지 않은 경우 에이전트 생성
+                max_cnt -= 1
+
         if is_occupied is False:
             if target_path:
                 target_path = target_path
+
             else:
                 target_path = [spawn_lane]
-                spawn_lane_cand = np.where(self.connectivity[spawn_lane]==1)[0]
-                while(len(spawn_lane_cand)>0):
+                spawn_lane_cand = np.where(
+                    self.connectivity[spawn_lane] == 1)[0]
+
+                while (len(spawn_lane_cand) > 0):
                     spawn_lane = np.random.choice(spawn_lane_cand)
                     target_path.append(spawn_lane)
-                    spawn_lane_cand = np.where(self.connectivity[spawn_lane]==1)[0]
+                    spawn_lane_cand = np.where(
+                        self.connectivity[spawn_lane] == 1)[0]
 
-            # 연결된 레인을 통해 에이전트의 경로 설정
-            target_pt = np.concatenate([self.map_pt[lane_id][:-1,:] for lane_id in target_path], axis=0)
+            target_pt = np.concatenate(
+                [self.map_pt[lane_id][:-1, :] for lane_id in target_path], axis=0)
             self.int_pt_list[self.spawn_id] = {}
 
-            # 기존의 모든 에이전트와의 교차점을 찾음
             for key in self.vehicles.keys():
-                intersections = find_intersections(target_pt[:,:3], self.vehicles[key].target_pt[:,:3]) # ((x,y), i, j)
+                intersections = find_intersections(
+                    target_pt[:, :3], self.vehicles[key].target_pt[:, :3])  # ((x,y), i, j)
+
                 if intersections:
-                    self.int_pt_list[self.spawn_id][key] = [(inter, xy[0], xy[1]) for (inter, xy) in intersections]
-                    self.int_pt_list[key][self.spawn_id] = [(inter, xy[1], xy[0]) for (inter, xy) in intersections]
+                    self.int_pt_list[self.spawn_id][key] = [
+                        (inter, xy[0], xy[1]) for (inter, xy) in intersections]
+                    self.int_pt_list[key][self.spawn_id] = [
+                        (inter, xy[1], xy[0]) for (inter, xy) in intersections]
 
-            # 정지선과 종료선 인덱스 설정
             stopline_idx = len(self.map_pt[target_path[0]])-1
-            endline_idx = len(self.map_pt[target_path[0]])+len(self.map_pt[target_path[1]])-2
+            endline_idx = len(
+                self.map_pt[target_path[0]])+len(self.map_pt[target_path[1]])-2
 
-            # 에이전트 객체 생성 및 초기화
-            self.vehicles[self.spawn_id] = agent(self.spawn_id, target_path, s_st, target_pt, dt=self.dt, init_v = init_v,
-                                                 stoplineidx = stopline_idx, endlineidx = endline_idx)
-            self.spawn_id +=1 # 에이전트 ID 증가
+            self.vehicles[self.spawn_id] = agent(self.spawn_id, target_path, s_st, target_pt, dt=self.dt, init_v=init_v,
+                                                 stoplineidx=stopline_idx, endlineidx=endline_idx)
+            self.spawn_id += 1
 
-    # 에이전트를 삭제하는 함수
     def delete_agent(self):
+
         delete_agent_list = []
+
         for id_ in self.vehicles.keys():
             if (self.vehicles[id_].target_s[-1]-10) < self.vehicles[id_].s:
                 delete_agent_list.append(id_)
 
         return delete_agent_list
 
-    # 상대 좌표를 절대 좌표로 변환하는 함수
-    def relative_to_absolute(self, sdv, sensor_info):
-        # SDV의 현재 위치와 헤딩 가져오기
-        sdv_x = sdv.x
-        sdv_y = sdv.y
-        sdv_h = sdv.h
+    def run(self):  # 10hz로 동작(main.py의 r = rospy.Rate(10)과 동일)
 
-        absolute_sensor_info = []
-        for info in sensor_info:
-            obj_id, rel_x, rel_y, rel_h, rel_vx, rel_vy = info
-
-            # 회전 변환을 사용해 상대 위치를 절대 위치로 변환
-            cos_h = np.cos(sdv_h)
-            sin_h = np.sin(sdv_h)
-            abs_x = sdv_x + cos_h * rel_x - sin_h * rel_y
-            abs_y = sdv_y + sin_h * rel_x + cos_h * rel_y
-
-            # 객체와 SDV 위치 사이의 절대 각도 계산
-            angle_to_obj = np.arctan2(abs_y - sdv_y, abs_x - sdv_x) - sdv_h
-            # 각도를 -π에서 π 사이로 정규화
-            angle_to_obj = np.arctan2(np.sin(angle_to_obj), np.cos(angle_to_obj))
-
-            # 변환된 데이터를 리스트에 추가
-            absolute_sensor_info.append([obj_id, abs_x, abs_y, rel_h, rel_vx, rel_vy, angle_to_obj])
-
-        return absolute_sensor_info
-
-    # 필터링된 센서 데이터를 반환하는 함수
-    def filter_sensor_data(self, obj_id, new_data):
-        # 이동 평균 필터 적용 로직
-        all_data = self.object_data[obj_id] + [new_data]
-        x_values = [d[1] for d in all_data]  # 데이터의 x 좌표
-        y_values = [d[2] for d in all_data]  # 데이터의 y 좌표
-        h_values = [d[3] for d in all_data]  # 데이터의 heading 차이
-
-        if len(all_data) < self.window_size:
-            filtered_x = moving_average(x_values, len(all_data))
-            filtered_y = moving_average(y_values, len(all_data))
-            filtered_h = moving_average(h_values, len(all_data))
-        else:
-            filtered_x = moving_average(x_values, self.window_size)
-            filtered_y = moving_average(y_values, self.window_size)
-            filtered_h = moving_average(h_values, self.window_size)
-
-        filtered_data = [obj_id, filtered_x[-1], filtered_y[-1], filtered_h[-1]] + new_data[4:]
-        return filtered_data
-
-    # 센서 데이터 업데이트 함수
-    def update_sensor_data(self, absolute_sensor_info):
-        current_detected = set()  # 이번 업데이트에서 감지된 객체 ID들 저장
-
-        # 첫 번째 관측 이후 필터링 적용하여 센서 데이터 업데이트
-        for data in absolute_sensor_info:
-            # data = [obj_id, abs_x, abs_y, rel_h, rel_vx, rel_vy]
-            obj_id = data[0]
-            current_detected.add(obj_id)
-            if obj_id not in self.object_data:
-                self.object_data[obj_id] = [data]  # 최초 감지 시 데이터 리스트 생성
-                self.object_recent_count[obj_id] = 1  # 최초 감지 시 카운트 1로 초기화
-            else:
-                if len(self.object_data[obj_id]) >= 1:  # 첫 관측 이후 데이터에 대해 필터링 적용
-                    filtered_data = self.filter_sensor_data(obj_id, data)
-                    self.object_data[obj_id].append(filtered_data)  # 기존 데이터 리스트에 추가
-                else: # 첫 관측 데이터는 그대로 추가
-                    self.object_data[obj_id].append(data)
-
-                # 데이터 관리
-                self.object_recent_count[obj_id] = min(self.recent_count_threshold, self.object_recent_count[obj_id] + 1)  # 카운트 증가하지만 최대값 초과 금지
-                # 데이터 리스트가 최대 크기를 초과하면 가장 오래된 데이터 제거
-                if len(self.object_data[obj_id]) > self.max_data_points:
-                    self.object_data[obj_id].pop(0)
-
-
-        # 미감지된 객체 카운트 감소 및 필요시 삭제
-        for obj_id in list(self.object_recent_count.keys()):
-            if obj_id not in current_detected:
-                self.object_data[obj_id].pop(0)
-                self.object_recent_count[obj_id] -= 1
-                if self.object_recent_count[obj_id] == 0:
-                    del self.object_data[obj_id]
-                    del self.object_recent_count[obj_id]
-
-    # 시뮬레이션 실행 함수
-    def run(self):
         for id_ in self.vehicles.keys():
             if id_ == 0:
-                # 첫 번째 에이전트에 대한 센서 정보와 로컬 경로 정보를 얻음
-                sensor_info = self.vehicles[id_].get_measure(self.vehicles) # [ obj id, rel x, rel y, rel h, rel vx, rel vy ]
+                sensor_info_local = self.vehicles[id_].get_measure(
+                    self.vehicles)
                 local_lane_info = self.vehicles[id_].get_local_path()
-                """
-                To Do
+                # TODO:
+                # 아래의 정보들을 활용하여, SDV가 주변 agent와 충돌 없이
+                # 교차로를 통과하여 target lane에 가기 위한 종 / 횡 방향 제어기 설계
+                # - sensor info [obj id, rel x, rel y, rel h, rel vx, rel vy]
+                # - local lane info [x, y, h, R]
+                # - SDV info : self.vehicles[id_].~ [x, y, h, v, s, d]
+                # - Global map info : self.map_pt / self.connectivity\
 
                 """
-                absolute_sensor_info = self.relative_to_absolute(self.vehicles[id_], sensor_info) # [ obj id, abs x, abs y, rel h, rel vx, rel vy, angle_to_obj ]
+                sensor_info: local frame to global frame
+                """
+                sensor_info_global = []  # [[obj id, rel x, rel y, rel h, rel vx, rel vy], …]
+                for i in (sensor_info_local):
+                    obj_id, rel_x, rel_y, rel_h, rel_vx, rel_vy = i
+                    x, y, h, vx, vy = local_to_global(
+                        self.vehicles[id_].x, self.vehicles[id_].y, self.vehicles[id_].h, self.vehicles[id_].v,
+                        rel_x, rel_y, rel_h, rel_vx, rel_vy)
+                    sensor_info_global.append([obj_id, x, y, h, vx, vy])
 
-                self.update_sensor_data(absolute_sensor_info)
-
-                # 전방 각도 사이의 차량과의 가장 가까운 거리 계산
-                distance_to_nearest = float('inf')
-                # print("-"*30)
-                for obj_id in self.object_data.keys():
-                    latest_data = self.object_data[obj_id][-1]
-
-                    if latest_data[6] <= 27 * (np.pi / 180) and latest_data[6] >= -27 * (np.pi / 180):
-                        distance = np.sqrt((self.vehicles[id_].x - latest_data[1])**2 + (self.vehicles[id_].y - latest_data[2])**2)
-                        # print(f"object ID {obj_id}와의 거리 : {distance}")
-                        if distance < distance_to_nearest:
-                            distance_to_nearest = distance
-                # print("-"*30, "\n")
-
-                # 현재 속도를 기준으로 감속 계수 및 거리 계산
-                current_speed = self.vehicles[id_].v
-                deceleration_factor = -np.clip(current_speed, 0.3, 5.0)
-                deceleration_distance = np.clip(current_speed*3, 10, 15)
-
-                if distance_to_nearest < deceleration_distance:
-                    # 거리 변화 감지 및 처리
-                    if abs(distance_to_nearest - self.last_distance_to_nearest) <= self.distance_change_threshold:
-                        print("Count")
-                        self.stop_count += 1
+                """
+                self.num_kalman_data개의 타입 스탬프 만큼의 데이터를 저장
+                """
+                # self.sensor_info_dict에 각 agent의 정보 저장
+                for info in (sensor_info_global):
+                    obj_id, x, y, h, vx, vy = info
+                    v = (vx**2 + vy**2) ** 0.5
+                    # 해당 obj_id가 sensor_info_dict에 이미 존재하는지 확인
+                    if obj_id in self.sensor_info_dict:
+                        # 이미 존재하면 해당 obj_id의 리스트에 새로운 데이터 추가
+                        self.sensor_info_dict[obj_id].append([x, y, h, v])
                     else:
-                        self.stop_count = 0  # 거리 변화가 감지되면 카운트 리셋
+                        # 존재하지 않으면 새로운 키-값 쌍 추가
+                        self.sensor_info_dict[obj_id] = [[x, y, h, v]]
+                    # obj_id당 최대 self.num_kalman_data개까지만 저장 (나중에 a, yaw_rate 추가한 후 마지막 항은 사용 X)
+                    if len(self.sensor_info_dict[obj_id]) > self.num_kalman_data:
+                        self.sensor_info_dict[obj_id].pop(0)
 
-                    if self.stop_count >= 3: # 3회 호출동안 거리 변화가 거의 없으면 서서히 움직임 시작
-                        print("Slow")
-                        self.vehicles[id_].step_manual(ax=1.0, steer=0)
+                """
+                local_lane_info를 global frame으로 변환 후 self.path_0에 저장
+                """
+                # local_lane_info를 global로 변환 후 self.path_0에 저장, self.check_intersection_distance만큼만 저장
+                local_lane_info = self.vehicles[id_].get_local_path()
+                distance = 0
+                self.path_0 = []
+                for i in range(len(local_lane_info)):
+                    x, y, h, R = local_lane_info[i]
+                    x, y, h, *_ = local_to_global(
+                        self.vehicles[id_].x, self.vehicles[id_].y, self.vehicles[id_].h, self.vehicles[id_].v, x, y, h, 0, 0)
+                    self.path_0.append((x, y))
+                    if i > 0:
+                        distance += np.sqrt((self.path_0[i][0] - self.path_0[i-1][0])**2 +
+                                            (self.path_0[i][1] - self.path_0[i-1][1])**2)
+                    if distance > self.check_intersection_distance:
+                        break
+
+            # self.sensor_info_dict에 a와 yaw_rate 추가
+            # self.sensor_info_dict[id_]: [[x, y, h, v, a, yaw_rate], ...]
+            if id_ > 0 and id_ in self.sensor_info_dict and len(self.sensor_info_dict[id_]) > 1:
+                for i in range(len(self.sensor_info_dict[id_])-1):
+                    x1, y1, h1, v1, *_ = self.sensor_info_dict[id_][i]
+                    x2, y2, h2, v2, *_ = self.sensor_info_dict[id_][i+1]
+                    a = (v2 - v1) / self.dt
+                    yaw_rate = (h2 - h1) / self.dt
+                    yaw_rate = np.arctan2(np.sin(yaw_rate), np.cos(yaw_rate))
+                    if len(self.sensor_info_dict[id_][i]) < 6:
+                        self.sensor_info_dict[id_][i].append(a)
+                        self.sensor_info_dict[id_][i].append(yaw_rate)
                     else:
-                        print("Break")
-                        self.vehicles[id_].step_manual(ax=deceleration_factor, steer=0)
-                else:
-                    print("Go")
-                    self.vehicles[id_].step_manual(ax=0.5, steer=0)
-                    self.stop_count = 0
+                        self.sensor_info_dict[id_][i][4] = a
+                        self.sensor_info_dict[id_][i][5] = yaw_rate
 
-                self.last_distance_to_nearest = distance_to_nearest
-            if id_  > 0 :
-                # 나머지 에이전트에 대해 자동 제어 단계를 실행
-                self.vehicles[id_].step_auto(self.vehicles, self.int_pt_list[id_])
+                """
+                IMM Filtering
+                """
 
-    # 에이전트 재생성 함수
+                self.tracker.add_tracker(id_)
+                self.tracker.initialize(id_, self.sensor_info_dict[id_][0])
+
+                for i in range(len(self.sensor_info_dict[id_]) - 1):
+                    self.tracker.update(id_, self.sensor_info_dict[id_][i])
+
+                trajs = self.tracker.predict()
+                self.kf_pred_dict[id_] = trajs[id_]
+
+            """
+            Control
+            """
+            if id_ == 0:
+                # 곡률 반지름에 따른 목표 속도 계산
+                radius_of_curvature_avg = np.mean(
+                    [info[3] for info in local_lane_info])
+                v_cur = self.vehicles[id_].v
+                v_target = self.curvature_speed_factor * radius_of_curvature_avg
+
+                # 다른 agent의 예측 경로와 SDV의 실제 경로를 비교하여 충돌 여부 확인
+                for kf_pred in self.kf_pred_dict.values():
+                    path_id_ = []
+                    for info in kf_pred:
+                        path_id_.append((info[0], info[1]))
+                    intersections = find_intersections_with_indices(
+                        self.path_0, path_id_)
+                    if len(intersections) > 0:
+                        print("Collision detected")
+                        v_target = 0
+                        break
+                v_target = np.clip(v_target, 0, self.v_max)
+                ax = self.k_p * (v_target - v_cur)
+                # SDV의 제어 입력
+                self.vehicles[id_].step_manual(ax, steer=0)
+
+            if id_ > 0:
+                self.vehicles[id_].step_auto(
+                    self.vehicles, self.int_pt_list[id_])
+
     def respawn(self):
-        # 환경 내의 에이전트 수가 최소 수보다 적은 경우 에이전트를 추가 생성
-        if len(self.vehicles)<self.min_num_agent:
+        if len(self.vehicles) < self.min_num_agent:
             self.spawn_agent()
 
+
 if __name__ == '__main__':
+
     try:
         f = Environments()
+
     except rospy.ROSInterruptException:
         rospy.logerr('Could not start node.')

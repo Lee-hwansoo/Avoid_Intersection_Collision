@@ -2,6 +2,37 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import comb
 
+def get_closest_point(path, current_position):
+    """
+    Find the closest point on a path to the current position of the vehicle
+    """
+    # Convert the path and current position to NumPy arrays
+    path_array = np.array(path)
+    current_position_array = np.array(current_position)
+
+    # Calculate the distance between each point on the path and the current position
+    distances = np.sqrt(np.sum((path_array - current_position_array)**2, axis=1))
+
+    # Find the index of the closest point
+    closest_point_index = np.argmin(distances)
+
+    # Get the closest point
+    closest_point = path[closest_point_index]
+
+    return closest_point_index, closest_point
+
+def local_to_global(base_x, base_y, base_yaw, base_v, local_x, local_y, local_yaw, local_vx, local_vy):
+    """
+    Convert local coordinates to global coordinates
+    """
+    X = base_x + local_x * np.cos(base_yaw) - local_y * np.sin(base_yaw)
+    Y = base_y + local_x * np.sin(base_yaw) + local_y * np.cos(base_yaw)
+    Yaw = base_yaw + local_yaw
+    Yaw = np.arctan2(np.sin(Yaw), np.cos(Yaw))
+    VX = base_v * np.cos(base_yaw) + local_vx * np.cos(base_yaw) - local_vy * np.sin(base_yaw)
+    VY = base_v * np.sin(base_yaw) + local_vx * np.sin(base_yaw) + local_vy * np.cos(base_yaw)
+
+    return X, Y, Yaw, VX, VY
 
 def get_cartesian(s, d, mapx, mapy, maps):
     """
@@ -25,6 +56,7 @@ def get_cartesian(s, d, mapx, mapy, maps):
     y = mapy[prev_wp] + seg_s * seg_y + d * seg_x
 
     return x, y
+
 
 def get_frenet(x, y, mapx, mapy, maps):
     """
@@ -57,7 +89,8 @@ def get_frenet(x, y, mapx, mapy, maps):
     # to the distance of the projection
     s = maps[closest_wp] + proj
 
-    return s,d
+    return s, d
+
 
 def moving_average(data, window_size):
     moving_averages = []
@@ -75,9 +108,10 @@ def moving_average(data, window_size):
 
     return moving_averages
 
+
 def check_intersection(p1, p2, p3, p4):
-    """
-    Check if line segments (p1, p2) and (p3, p4) intersect.
+    """ 
+    Check if line segments (p1, p2) and (p3, p4) intersect. 
     Returns True if they intersect.
     """
     def ccw(A, B, C):
@@ -85,12 +119,13 @@ def check_intersection(p1, p2, p3, p4):
 
     return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
 
+
 def segment_intersection(p1, p2, p3, p4):
-    """
-    Find the intersection point of line segments (p1, p2) and (p3, p4)
+    """ 
+    Find the intersection point of line segments (p1, p2) and (p3, p4) 
     if they intersect.
     """
-    det = lambda a, b: a[0] * b[1] - a[1] * b[0]
+    def det(a, b): return a[0] * b[1] - a[1] * b[0]
     xdiff = (p1[0] - p2[0], p3[0] - p4[0])
     ydiff = (p1[1] - p2[1], p3[1] - p4[1])
     div = det(xdiff, ydiff)
@@ -102,6 +137,7 @@ def segment_intersection(p1, p2, p3, p4):
     y = det(d, ydiff) / div
     return (x, y)
 
+
 def find_intersections(points1, points2):
     """
     Check for intersections between two lists of points that define two lines.
@@ -111,11 +147,13 @@ def find_intersections(points1, points2):
     for i in range(len(points1) - 1):
         for j in range(len(points2) - 1):
             if check_intersection(points1[i], points1[i+1], points2[j], points2[j+1]):
-                intersect = segment_intersection(points1[i], points1[i+1], points2[j], points2[j+1])
+                intersect = segment_intersection(
+                    points1[i], points1[i+1], points2[j], points2[j+1])
                 if intersect:
-                    intersections.append((intersect, (i,j)))
+                    intersections.append((intersect, (i, j)))
 
     return intersections
+
 
 def find_intersections_with_indices(points1, points2):
     """
@@ -126,9 +164,9 @@ def find_intersections_with_indices(points1, points2):
     for i in range(len(points1) - 1):
         for j in range(len(points2) - 1):
             if check_intersection(points1[i], points1[i+1], points2[j], points2[j+1]):
-                intersect = segment_intersection(points1[i], points1[i+1], points2[j], points2[j+1])
+                intersect = segment_intersection(
+                    points1[i], points1[i+1], points2[j], points2[j+1])
                 if intersect:
                     intersections.append((intersect, (i, j)))
 
     return intersections
-

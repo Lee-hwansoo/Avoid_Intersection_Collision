@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-#-*- coding:utf-8 -*-
+# -*- coding:utf-8 -*-
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,9 +23,13 @@ from geometry_msgs.msg import Twist, Point32, PolygonStamped, Polygon, Vector3, 
 from visualization_msgs.msg import MarkerArray, Marker
 
 from std_msgs.msg import Float32, Float64, Header, ColorRGBA, UInt8, String, Float32MultiArray, Int32MultiArray
+from nav_msgs.msg import Path
+from geometry_msgs.msg import PoseStamped
+
 
 class Simulation(object):
     def __init__(self, dt=0.1):
+
         rospy.init_node('simulation')
 
         self.set_subscriber()
@@ -34,21 +38,26 @@ class Simulation(object):
 
         r = rospy.Rate(10)
         while not rospy.is_shutdown():
+
             self.run()
             r.sleep()
 
     def initialize(self):
         self.pause = False
-        course_idx = 2 # 0 : 좌회전 / 1 : 직진 / 2 : 우회전
+        course_idx = 0  # 0 : 좌회전 / 1 : 직진 / 2 : 우회전
         self.env = Environments(course_idx)
 
     def run(self):
+
         if self.pause:
             pass
         else:
             self.env.run()
             self.pub_track()
             self.pub_map()
+            self.pub_kf_pred()
+            # self.pub_kalman_history()
+            self.pub_SDV_path()
 
             self.delete_agent()
 
@@ -64,12 +73,14 @@ class Simulation(object):
             self.env.int_pt_list.pop(id_, None)
 
     def callback_plot(self, data):
-        if data.linear.x>0 and data.angular.z>0: #u
+
+        if data.linear.x > 0 and data.angular.z > 0:  # u
             self.pause = True
         else:
             self.pause = False
 
     def pub_track(self, delete_agent_list=[]):
+
         Objects = MarkerArray()
         Objects_v = MarkerArray()
         Objects_brake = MarkerArray()
@@ -78,7 +89,8 @@ class Simulation(object):
         Texts = MarkerArray()
 
         for id_ in self.env.vehicles.keys():
-            q = tf.transformations.quaternion_from_euler(0, 0, self.env.vehicles[id_].h)
+            q = tf.transformations.quaternion_from_euler(
+                0, 0, self.env.vehicles[id_].h)
 
             marker = Marker()
             marker.header.frame_id = "base_link"
@@ -95,7 +107,7 @@ class Simulation(object):
             marker.scale.x = 5
             marker.scale.y = 2.5
             marker.scale.z = 3
-            marker.color = ColorRGBA(0,0,1,1)
+            marker.color = ColorRGBA(0, 0, 1, 1)
 
             if id_ in delete_agent_list:
                 marker.action = Marker.DELETE
@@ -107,13 +119,15 @@ class Simulation(object):
             marker.header.stamp = rospy.Time.now()
             marker.id = id_
             marker.type = Marker.CYLINDER
-            marker.pose.position.x = self.env.vehicles[id_].x + 1*-np.sin(self.env.vehicles[id_].h)
-            marker.pose.position.y = self.env.vehicles[id_].y + 1*np.cos(self.env.vehicles[id_].h)
+            marker.pose.position.x = self.env.vehicles[id_].x + \
+                1*-np.sin(self.env.vehicles[id_].h)
+            marker.pose.position.y = self.env.vehicles[id_].y + 1*np.cos(
+                self.env.vehicles[id_].h)
             marker.pose.position.z = 8 + 1/2*self.env.vehicles[id_].v/5
             marker.scale.x = 1
             marker.scale.y = 1
             marker.scale.z = self.env.vehicles[id_].v/5
-            marker.color = ColorRGBA(0,1,0,1)
+            marker.color = ColorRGBA(0, 1, 0, 1)
             if id_ in delete_agent_list:
                 marker.action = Marker.DELETE
 
@@ -126,11 +140,12 @@ class Simulation(object):
             marker.type = Marker.CYLINDER
             marker.pose.position.x = self.env.vehicles[id_].x
             marker.pose.position.y = self.env.vehicles[id_].y
-            marker.pose.position.z = 8 + 1/2*np.clip(self.env.vehicles[id_].ax,0, 9.8)/3
+            marker.pose.position.z = 8 + 1/2 * \
+                np.clip(self.env.vehicles[id_].ax, 0, 9.8)/3
             marker.scale.x = 1
             marker.scale.y = 1
-            marker.scale.z = np.clip(self.env.vehicles[id_].ax,0, 9.8)/3
-            marker.color = ColorRGBA(0,0,1,1)
+            marker.scale.z = np.clip(self.env.vehicles[id_].ax, 0, 9.8)/3
+            marker.color = ColorRGBA(0, 0, 1, 1)
             if id_ in delete_agent_list:
                 marker.action = Marker.DELETE
 
@@ -141,13 +156,16 @@ class Simulation(object):
             marker.header.stamp = rospy.Time.now()
             marker.id = id_
             marker.type = Marker.CYLINDER
-            marker.pose.position.x = self.env.vehicles[id_].x - 1*-np.sin(self.env.vehicles[id_].h)
-            marker.pose.position.y = self.env.vehicles[id_].y - 1*np.cos(self.env.vehicles[id_].h)
-            marker.pose.position.z = 8 -1/2*np.clip(self.env.vehicles[id_].ax,-9.8, 0)/3
+            marker.pose.position.x = self.env.vehicles[id_].x - \
+                1*-np.sin(self.env.vehicles[id_].h)
+            marker.pose.position.y = self.env.vehicles[id_].y - 1*np.cos(
+                self.env.vehicles[id_].h)
+            marker.pose.position.z = 8 - 1/2 * \
+                np.clip(self.env.vehicles[id_].ax, -9.8, 0)/3
             marker.scale.x = 1
             marker.scale.y = 1
-            marker.scale.z = -np.clip(self.env.vehicles[id_].ax,-9.8, 0)/3
-            marker.color = ColorRGBA(1,0,0,1)
+            marker.scale.z = -np.clip(self.env.vehicles[id_].ax, -9.8, 0)/3
+            marker.color = ColorRGBA(1, 0, 0, 1)
             if id_ in delete_agent_list:
                 marker.action = Marker.DELETE
 
@@ -161,8 +179,10 @@ class Simulation(object):
             text.action = Marker.ADD
             text.color = ColorRGBA(1, 1, 1, 1)
             text.scale.z = 5
-            text.text = str(id_)
-            text.pose.position = Point(self.env.vehicles[id_].x, self.env.vehicles[id_].y, 5)
+            text.text = str(id_) + \
+                "(" + str(round(self.env.vehicles[id_].v, 2)) + ")"
+            text.pose.position = Point(
+                self.env.vehicles[id_].x, self.env.vehicles[id_].y, 5)
 
             if id_ in delete_agent_list:
                 text.action = Marker.DELETE
@@ -177,6 +197,7 @@ class Simulation(object):
         self.text_plot.publish(Texts)
 
     def pub_map(self):
+
         Maps = MarkerArray()
 
         for i in range(len(self.env.map_pt)):
@@ -187,14 +208,14 @@ class Simulation(object):
             line_strip.scale.y = 0.1
             line_strip.scale.z = 0.1
 
-            line_strip.color = ColorRGBA(1.0,1.0,0.0,0.5)
+            line_strip.color = ColorRGBA(1.0, 1.0, 0.0, 0.5)
             line_strip.header = Header(frame_id='base_link')
 
             temp = self.env.map_pt[i]
             for j in range(len(temp)):
                 point = Point()
-                point.x = temp[j,0]
-                point.y = temp[j,1]
+                point.x = temp[j, 0]
+                point.y = temp[j, 1]
                 point.z = 0
 
                 line_strip.points.append(point)
@@ -203,34 +224,130 @@ class Simulation(object):
 
         self.map_plot.publish(Maps)
 
+    def pub_kf_pred(self):
+        Paths = MarkerArray()
+
+        for obj_id, pred_data in self.env.kf_pred_dict.items():
+            path = Marker()
+            path.header.frame_id = "base_link"
+            path.header.stamp = rospy.Time.now()
+            path.ns = str(obj_id)
+            path.id = obj_id
+            path.type = Marker.LINE_STRIP
+            path.action = Marker.ADD
+            path.pose.orientation.w = 1.0
+            path.scale.x = 0.7
+            path.color.a = 1.0  # Alpha
+            path.color.r = 0.0  # Red
+            path.color.g = 1.0  # Green
+            path.color.b = 0.0  # Blue
+
+            # pred_data: [[x, y, v, a, theta, theta_rate],...]
+            for i in range(len(pred_data)):
+                point = Point()
+                point.x = pred_data[i][0]
+                point.y = pred_data[i][1]
+                point.z = 0
+                path.points.append(point)
+
+            Paths.markers.append(path)
+
+        self.kf_pred_path.publish(Paths)
+
+    def pub_SDV_path(self):
+        # path_msg = Path()
+        # path_msg.header.frame_id = "base_link"  # Change the frame_id as needed
+
+        # for point in self.env.path_0:
+        #     pose = PoseStamped()
+        #     pose.pose.position.x = point[0]
+        #     pose.pose.position.y = point[1]
+        #     pose.pose.position.z = 0.0
+        #     pose.pose.orientation.x = 0.0
+        #     pose.pose.orientation.y = 0.0
+        #     pose.pose.orientation.z = 0.0
+        #     pose.pose.orientation.w = 1.0
+        #     path_msg.poses.append(pose)
+
+        # self.SDV_path.publish(path_msg)
+        marker_msg = Marker()
+        marker_msg.header.frame_id = "base_link"  # Change the frame_id as needed
+        marker_msg.type = Marker.LINE_STRIP
+        marker_msg.action = Marker.ADD
+        marker_msg.scale.x = 1.0  # Thickness of the line, adjust as needed
+        marker_msg.color.r = 0.0
+        marker_msg.color.g = 1.0
+        marker_msg.color.b = 0.0
+        marker_msg.color.a = 1.0
+
+        for point in self.env.path_0:
+            p = Point()
+            p.x = point[0]
+            p.y = point[1]
+            p.z = 0.0
+            marker_msg.points.append(p)
+        self.SDV_path.publish(marker_msg)
+
+    # def pub_kalman_history(self):
+    #     Paths = MarkerArray()
+
+    #     for obj_id, pred_data in self.env.kalman_filter_dict.items():
+    #         path = Marker()
+    #         path.header.frame_id = "base_link"
+    #         path.header.stamp = rospy.Time.now()
+    #         path.ns = str(obj_id)
+    #         path.id = obj_id
+    #         path.type = Marker.LINE_STRIP
+    #         path.action = Marker.ADD
+    #         path.pose.orientation.w = 1.0
+    #         path.scale.x = 0.7
+    #         path.color.a = 1.0  # Alpha
+    #         path.color.r = 0.0  # Red
+    #         path.color.g = 0.0  # Green
+    #         path.color.b = 1.0  # Blue
+
+    #         # pred_data: [[x, y, v, a, theta, theta_rate],...]
+    #         for i in range(len(pred_data)):
+    #             point = Point()
+    #             point.x = pred_data[i][0]
+    #             point.y = pred_data[i][1]
+    #             point.z = 0
+    #             path.points.append(point)
+
+    #         Paths.markers.append(path)
+
+    #     self.kalman_history_path.publish(Paths)
+
     def set_subscriber(self):
-        rospy.Subscriber('/cmd_vel',Twist, self.callback_plot,queue_size=1)
+        rospy.Subscriber('/cmd_vel', Twist, self.callback_plot, queue_size=1)
 
     def set_publisher(self):
+
         # Object Cube & ID
-        self.sur_pose_plot = rospy.Publisher('/rviz/sur_obj_pose', MarkerArray, queue_size=1)
-        self.sur_v_plot = rospy.Publisher('/rviz/sur_v_plot', MarkerArray, queue_size=1)
-        self.sur_accel_plot = rospy.Publisher('/rviz/sur_accel_plot', MarkerArray, queue_size=1)
-        self.sur_decel_plot = rospy.Publisher('/rviz/sur_decel_plot', MarkerArray, queue_size=1)
-
-        self.text_plot = rospy.Publisher('/rviz/text', MarkerArray, queue_size=1)
-
-        # Map Point
-        self.map_plot = rospy.Publisher('/rviz/maps', MarkerArray, queue_size=1)
+        self.sur_pose_plot = rospy.Publisher(
+            '/rviz/sur_obj_pose', MarkerArray, queue_size=1)
+        self.sur_v_plot = rospy.Publisher(
+            '/rviz/sur_v_plot', MarkerArray, queue_size=1)
+        self.sur_accel_plot = rospy.Publisher(
+            '/rviz/sur_accel_plot', MarkerArray, queue_size=1)
+        self.sur_decel_plot = rospy.Publisher(
+            '/rviz/sur_decel_plot', MarkerArray, queue_size=1)
+        self.text_plot = rospy.Publisher(
+            '/rviz/text', MarkerArray, queue_size=1)
+        self.map_plot = rospy.Publisher(
+            '/rviz/maps', MarkerArray, queue_size=1)
+        self.kf_pred_path = rospy.Publisher(
+            '/rviz/kf_pred_path', MarkerArray, queue_size=1)
+        # self.kalman_history_path = rospy.Publisher(
+        #     '/rviz/kalman_history_path', MarkerArray, queue_size=1)
+        self.SDV_path = rospy.Publisher(
+            '/rviz/SDV_path', Marker, queue_size=1)
 
 
 if __name__ == '__main__':
+
     try:
         f = Simulation()
+
     except rospy.ROSInterruptException:
         rospy.logerr('Could not start node.')
-
-
-
-
-
-
-
-
-
-

@@ -2,81 +2,81 @@ import numpy as np
 import bisect
 from utils import *
 
-# agent 클래스 정의
+
 class agent():
-    def __init__(self, spawn_id, lane, s_st, target_pt, dt=0.1, init_v = None, target_v = None, stoplineidx = None, endlineidx = None):
-        # 생성자: 에이전트의 초기 속성 설정
-        self.id = spawn_id # 에이전트 고유 ID
-        self.lane_st = lane[0] # 현재 차선
-        self.dt = dt # 시뮬레이션의 시간 간격
+    def __init__(self, spawn_id, lane, s_st, target_pt, dt=0.1, init_v=None, target_v=None, stoplineidx=None, endlineidx=None):
 
-        # 목표 경로 설정
-        self.target_pt = target_pt[:,:3] # 경로의 x, y, h(방향)
-        # 누적 거리 계산
-        self.target_s = np.cumsum(np.linalg.norm(self.target_pt[1:,:2]-self.target_pt[:-1,:2], axis=-1))
-        self.target_s = np.insert(self.target_s, 0, 0, axis=0) # 누적 거리 배열의 시작을 0으로 설정
-        self.target_radius = target_pt[:,-1] # 경로의 반경 정보
+        self.id = spawn_id
+        self.lane_st = lane[0]
+        self.dt = dt
 
-        # 정지선 및 종료선 인덱스
+        self.target_pt = target_pt[:, :3]
+        self.target_s = np.cumsum(np.linalg.norm(
+            self.target_pt[1:, :2]-self.target_pt[:-1, :2], axis=-1))
+        self.target_s = np.insert(self.target_s, 0, 0, axis=0)
+        self.target_radius = target_pt[:, -1]
+
         self.stoplineidx = stoplineidx
         self.endlineidx = endlineidx
 
-        # 초기 위치 및 속도 설정
-        self.s = s_st # Frenet s 좌표
-        self.d = 0 # Frenet d 좌표 (차선 중심으로부터의 거리)
-        self.s_idx = bisect.bisect_left(self.target_s, self.s) # s 좌표에 대한 인덱스 검색
+        self.s = s_st
+        self.d = 0
+        self.s_idx = bisect.bisect_left(self.target_s, self.s)
 
-        # 현재 위치 계산
-        self.x, self.y = get_cartesian(self.s, self.d, self.target_pt[:,0],self.target_pt[:,1], self.target_s)
-        self.h = self.get_heading() # 현재 방향 계산
+        self.x, self.y = get_cartesian(
+            self.s, self.d, self.target_pt[:, 0], self.target_pt[:, 1], self.target_s)
+        self.h = self.get_heading()
 
-        # 초기 속도 설정, 랜덤 또는 지정값 사용
         if init_v is not None:
             self.v = init_v
         else:
-            self.v = np.random.randint(8,13)
+            self.v = np.random.randint(8, 13)
 
-        self.target_v = np.random.randint(self.v,15)
+        self.target_v = np.random.randint(self.v, 15)
 
-        self.ax = 0 # 가속도 초기화
-        self.steer = 0 # 조향각 초기화
+        self.ax = 0
+        self.steer = 0
 
-        # 안전 마진 설정
-        self.front_margin = 5 # 전방 마진
-        self.rear_margin = 5 # 후방 마진
+        self.front_margin = 5
+        self.rear_margin = 5
 
-    # 방향(heading)을 계산하는 메서드
     def get_heading(self):
-        ratio = (self.s-self.target_s[self.s_idx])/(self.target_s[self.s_idx+1]-self.target_s[self.s_idx])
-        h = self.target_pt[self.s_idx,2] + ratio*(self.target_pt[self.s_idx+1,2]-self.target_pt[self.s_idx,2])
+        ratio = (self.s-self.target_s[self.s_idx]) / \
+            (self.target_s[self.s_idx+1]-self.target_s[self.s_idx])
+        h = self.target_pt[self.s_idx, 2] + ratio * \
+            (self.target_pt[self.s_idx+1, 2]-self.target_pt[self.s_idx, 2])
         h = np.arctan2(np.sin(h), np.cos(h))
 
         return h
 
-    # 로컬 경로를 반환하는 메서드
     def get_local_path(self):
-        target_local_path = self.target_pt[self.s_idx:self.s_idx+50,:] - np.array([self.x, self.y, self.h])
+
+        target_local_path = self.target_pt[self.s_idx:self.s_idx +
+                                           50, :] - np.array([self.x, self.y, self.h])
         rotation_mat = np.array([[np.cos(self.h), -np.sin(self.h)],
                                  [np.sin(self.h), np.cos(self.h)]])
 
-        target_local_pos = np.matmul(target_local_path[:,:2], rotation_mat)
-        target_local_head = np.arctan2(np.sin(target_local_path[:,2]), np.cos(target_local_path[:,2]))[:,np.newaxis]
-        target_local_R = self.target_radius[self.s_idx:self.s_idx+50][:,np.newaxis]
+        target_local_pos = np.matmul(target_local_path[:, :2], rotation_mat)
+        target_local_head = np.arctan2(np.sin(target_local_path[:, 2]), np.cos(
+            target_local_path[:, 2]))[:, np.newaxis]
+        target_local_R = self.target_radius[self.s_idx:self.s_idx +
+                                            50][:, np.newaxis]
 
         return np.concatenate([target_local_pos, target_local_head, target_local_R], axis=-1)
 
-    # 주변 차량에 대한 정보를 측정하는 메서드
     def get_measure(self, vehicles):
+
         Sensors = []
+
         for id_ in vehicles.keys():
             if id_ == self.id:
                 continue
 
-            noise_x = np.random.randn()*0.5
-            noise_y = np.random.randn()*0.3
+            noise_x = np.random.randn()*0.05
+            noise_y = np.random.randn()*0.05
             noise_h = np.random.randn()*0.05
-            noise_vx = np.random.randn()*0.1
-            noise_vy = np.random.randn()*0.2
+            noise_vx = np.random.randn()*0.05
+            noise_vy = np.random.randn()*0.05
 
             veh_x = vehicles[id_].x - self.x
             veh_y = vehicles[id_].y - self.y
@@ -84,30 +84,36 @@ class agent():
             veh_vx = vehicles[id_].v * np.cos(veh_h) - self.v
             veh_vy = vehicles[id_].v * np.sin(veh_h)
 
-            veh_pos_local_x = veh_x*np.cos(self.h) + veh_y*np.sin(self.h) + noise_x
-            veh_pos_local_y = -veh_x*np.sin(self.h) + veh_y*np.cos(self.h) + noise_y
+            veh_pos_local_x = veh_x * \
+                np.cos(self.h) + veh_y*np.sin(self.h) + noise_x
+            veh_pos_local_y = -veh_x * \
+                np.sin(self.h) + veh_y*np.cos(self.h) + noise_y
             veh_pos_local_h = veh_h + noise_h
-            veh_pos_local_h = np.arctan2(np.sin(veh_pos_local_h), np.cos(veh_pos_local_h))
+            veh_pos_local_h = np.arctan2(
+                np.sin(veh_pos_local_h), np.cos(veh_pos_local_h))
             veh_vel_local_x = veh_vx + noise_vx
             veh_vel_local_y = veh_vy + noise_vy
 
-            if np.abs(np.arctan2(veh_pos_local_y, veh_pos_local_x)) <=60/57.3:
-                Sensors.append([id_, veh_pos_local_x, veh_pos_local_y, veh_pos_local_h, veh_vel_local_x, veh_vel_local_y])
+            if np.abs(np.arctan2(veh_pos_local_y, veh_pos_local_x)) <= 60/57.3:
+                Sensors.append([id_, veh_pos_local_x, veh_pos_local_y,
+                               veh_pos_local_h, veh_vel_local_x, veh_vel_local_y])
 
         return Sensors
 
-    # 조향 컨트롤러 메서드
     def lateral_controller(self):
+
         path = self.get_local_path()
         self.local_path = path
 
-        if len(path)==0:
+        if len(path) == 0:
             delta = 0
 
         else:
             lookahead_dist = self.v*1
-            target_idx = np.where(path[:,0]>=lookahead_dist)[0]
-            if len(target_idx)==0:
+
+            target_idx = np.where(path[:, 0] >= lookahead_dist)[0]
+
+            if len(target_idx) == 0:
                 target_idx = len(path)-1
             else:
                 target_idx = target_idx[0]
@@ -121,16 +127,14 @@ class agent():
 
         return delta
 
-    # 종 방향 컨트롤러 메서드
     def longitudianal_controller(self, vehicles, int_pt_list):
+
         ax_list = self.get_a_agent(vehicles, int_pt_list)
 
-        # 목표 속도에 도달하기 위한 가속도 계산
         # add non-front vehicle case
         ax_tarv = self.IDM((1e3, 0, -1e2))
         ax_list.append(ax_tarv)
 
-        # 커브를 고려한 가속도 계산
         # add curvature case
         ax_curv = self.get_a_curvature()
         ax_list.append(ax_curv)
@@ -138,10 +142,10 @@ class agent():
         min_idx = np.argmin(np.array(ax_list))
         ax = ax_list[min_idx]
 
-        return np.clip(ax, -5,5)
+        return np.clip(ax, -5, 5)
 
-    # 수동 제어 단계 실행 메서드
     def step_manual(self, ax, steer):
+
         steer = self.lateral_controller()
 
         self.v += ax*self.dt
@@ -151,17 +155,18 @@ class agent():
         self.x += np.cos(self.h)*self.v*self.dt
         self.y += np.sin(self.h)*self.v*self.dt
 
-        self.s, self.d = get_frenet(self.x, self.y, self.target_pt[:,0], self.target_pt[:,1], self.target_s)
+        self.s, self.d = get_frenet(
+            self.x, self.y, self.target_pt[:, 0], self.target_pt[:, 1], self.target_s)
         self.s_idx = bisect.bisect_left(self.target_s, self.s)
 
-    # 자동 제어 단계 실행 메서드
     def step_auto(self, vehicles, int_pt_list):
+
         delta = self.lateral_controller()
         self.steer = delta
 
         ax = self.longitudianal_controller(vehicles, int_pt_list)
-        dax = np.clip(ax-self.ax, -1,1)
-        self.ax +=dax
+        dax = np.clip(ax-self.ax, -1, 1)
+        self.ax += dax
         self.ax = np.clip(self.ax, -self.v / self.dt, 5)
 
         self.v += self.ax*self.dt
@@ -173,19 +178,19 @@ class agent():
         self.x += np.cos(self.h)*self.v*self.dt
         self.y += np.sin(self.h)*self.v*self.dt
 
-        self.s, self.d = get_frenet(self.x, self.y, self.target_pt[:,0], self.target_pt[:,1], self.target_s)
+        self.s, self.d = get_frenet(
+            self.x, self.y, self.target_pt[:, 0], self.target_pt[:, 1], self.target_s)
         self.s_idx = bisect.bisect_left(self.target_s, self.s)
 
-    # IDM 모델을 사용하여 가속도를 계산하는 메서드
     def IDM(self, front_info):
         # Compute the desired dynamic distance
-        T = 1.5 # safe time headway(s) # 안전 시간 간격
-        s0 = 5 # minimum desired net distance(m) # 최소 거리
-        delta = 4 #acceleration exponenet # 가속도 계수
-        a = 0.73 # Maximum vehicle acceleration (m/s^2) # p에 따라 바꿔야 함. # 최대 가속도
-        b = 1.67 # Comfortable deceleration (m/s^2) # 편안한 감속도
+        T = 1.5  # safe time headway(s)
+        s0 = 5  # minimum desired net distance(m)
+        delta = 4  # acceleration exponenet
+        a = 0.73  # Maximum vehicle acceleration (m/s^2) # p에 따라 바꿔야 함.
+        b = 1.67  # Comfortable deceleration (m/s^2)
 
-        ego2int, tar2int, delta_v =  front_info
+        ego2int, tar2int, delta_v = front_info
         s = ego2int-tar2int + 1e-5
 
         v = self.v
@@ -198,8 +203,8 @@ class agent():
 
         return np.clip(acceleration, -5, 5)
 
-    # 커브에 대한 가속도를 계산하는 메서드
     def get_a_curvature(self):
+
         max_ay = 1.2
         lookahead_s = np.clip(self.v*2, 15, 70) + self.s
         end_idx = bisect.bisect_left(self.target_s, lookahead_s)
@@ -214,38 +219,46 @@ class agent():
             min_r = self.target_radius[self.s_idx+min_r_idx]
             v_max = np.sqrt(max_ay*np.abs(min_r))
             ax = (v_max-self.v)/self.dt
-            ax = np.clip((v_max**2 - self.v**2)/(2*(self.target_s[self.s_idx+min_r_idx]- self.s)), -10, 10)
+            ax = np.clip((v_max**2 - self.v**2) /
+                         (2*(self.target_s[self.s_idx+min_r_idx] - self.s)), -10, 10)
 
         return ax
 
-    # 다른 에이전트에 대한 가속도 계산을 포함한 메서드
-    def get_a_agent(self,vehicles, int_pt_list):
+    def get_a_agent(self, vehicles, int_pt_list):
+
         ax_list = []
 
         # get interest agents info
-        front_id_list = self.get_front_id(vehicles, int_pt_list) # 전방의 에이전트 ID들을 가져옴
+        front_id_list = self.get_front_id(vehicles, int_pt_list)
 
         for front_info in front_id_list:
-            if front_info[-1] == 0: # 같은 레인의 전방 차량
+
+            if front_info[-1] == 0:
                 # 전방 ego lane 일부분을 차지
                 ax = self.IDM(front_info[1:4])
-            elif front_info[-1] == 3: # 합류하는 차량
-                ## merge
+
+            elif front_info[-1] == 3:
+                # merge
                 ax = self.IDM(front_info[1:4])
+
             else:
                 # cross
                 tarid = front_info[0]
-                tar2int = np.clip(front_info[2],0,1e2) + self.rear_margin ## 후방이 통과까지 걸리는 거리
-                tarv_expect = np.sqrt((np.clip(2*vehicles[tarid].ax*tar2int,0,100) + vehicles[tarid].v**2))
-                tarTTI = np.max([(tarv_expect-vehicles[tarid].v) / (vehicles[tarid].ax + 1e-5), tar2int/(vehicles[tarid].v+1e-2)])
-                ego2int = front_info[1] - self.front_margin*2 # 전방이 진입까지 걸리는 거리
-                ax = np.clip((2*ego2int - 2*self.v*tarTTI)/(tarTTI**2+1e-4), -10, 3)
+                # 후방이 통과까지 걸리는 거리
+                tar2int = np.clip(front_info[2], 0, 1e2) + self.rear_margin
+                tarv_expect = np.sqrt(
+                    (np.clip(2*vehicles[tarid].ax*tar2int, 0, 100) + vehicles[tarid].v**2))
+                tarTTI = np.max([(tarv_expect-vehicles[tarid].v) /
+                                (vehicles[tarid].ax + 1e-5), tar2int/(vehicles[tarid].v+1e-2)])
+                ego2int = front_info[1] - \
+                    self.front_margin*2  # 전방이 진입까지 걸리는 거리
+                ax = np.clip((2*ego2int - 2*self.v*tarTTI) /
+                             (tarTTI**2+1e-4), -10, 3)
 
             ax_list.append(ax)
 
         return ax_list
 
-    # 충돌 가능성이 있는 에이전트의 ID를 찾는 메서드
     def get_front_id(self, Vehicles, int_pt_list):
         """
         충돌 가능성이 있는 agent's id를 탐색
@@ -262,8 +275,9 @@ class agent():
             if self.id == tar.id:
                 continue
 
-            ## Check front agents
-            s, d = get_frenet(tar.x, tar.y, self.target_pt[:,0],self.target_pt[:,1], self.target_s)
+            # Check front agents
+            s, d = get_frenet(
+                tar.x, tar.y, self.target_pt[:, 0], self.target_pt[:, 1], self.target_s)
             ego2int = s - self.s
 
             if d < 2.4 and ego2int >= 0:
@@ -271,11 +285,11 @@ class agent():
                 dh = (self.h - tar.h)
                 rel_v = self.v - tar.v*np.cos(dh)
                 front_flag = 0
-                Front_id_list.append( [ id_, ego2int-self.front_margin, tar2int, rel_v, self.v, tar.v, front_flag ] )
+                Front_id_list.append(
+                    [id_, ego2int-self.front_margin, tar2int, rel_v, self.v, tar.v, front_flag])
                 continue
 
-            # 교차점의 첫 번째 교차점 정보를 확인
-            ## Check intersection agents
+            # Check intersection agents
             # Get first intersection point between two agents
             inter_idx = None
             if id_ in int_pt_list.keys():
@@ -288,38 +302,42 @@ class agent():
                 ego2int = self.target_s[inter_idx[0]] - self.s
                 tar2int = tar.target_s[inter_idx[1]] - tar.s
 
-                egoTTI = ego2int / np.clip( self.v , 3, 30)
-                tarTTI = tar2int / np.clip(tar.v , 3, 30)
+                egoTTI = ego2int / np.clip(self.v, 3, 30)
+                tarTTI = tar2int / np.clip(tar.v, 3, 30)
 
                 if tar2int > ROI_range or tarTTI > 20:
                     continue
 
                 else:
-                    ego_angle_int = self.target_pt[inter_idx[0],2]
-                    tar_angle_int = tar.target_pt[inter_idx[1],2]
-                    inter_angle = ( ego_angle_int - tar_angle_int)
-                    inter_angle = np.arctan2(np.sin(inter_angle), np.cos(inter_angle))
+                    ego_angle_int = self.target_pt[inter_idx[0], 2]
+                    tar_angle_int = tar.target_pt[inter_idx[1], 2]
+                    inter_angle = (ego_angle_int - tar_angle_int)
+                    inter_angle = np.arctan2(
+                        np.sin(inter_angle), np.cos(inter_angle))
 
                     isinsidetar = tar.target_s[tar.stoplineidx] < tar.s and \
-                            tar.s <= tar.target_s[tar.endlineidx]  # True if target agent is inside intersection area.
+                        tar.s <= tar.target_s[tar.endlineidx]  # True if target agent is inside intersection area.
 
                     rel_v = self.v - tar.v
 
                     # 같은 교점으로 접근. merging, cross
                     if np.abs(inter_angle) * 57.3 > 30:
-                        ## cross
-                        if (tarTTI < egoTTI): ## target이 우선순위.
+                        # cross
+                        if (tarTTI < egoTTI):  # target이 우선순위.
                             front_flag = 1
-                            Front_id_list.append( [ id_, ego2int, tar2int, rel_v, self.v, tar.v, front_flag ] )
+                            Front_id_list.append(
+                                [id_, ego2int, tar2int, rel_v, self.v, tar.v, front_flag])
 
                         if (isinsidetar and (tar2int < ego2int)):
                             front_flag = 2
-                            Front_id_list.append( [ id_, ego2int, tar2int, rel_v, self.v, tar.v, front_flag ] )
+                            Front_id_list.append(
+                                [id_, ego2int, tar2int, rel_v, self.v, tar.v, front_flag])
 
                     else:
                         if ego2int > 2.5 and tar2int > 2.5 and (tar2int < ego2int):
-                            ## merge
+                            # merge
                             front_flag = 3
-                            Front_id_list.append( [ id_, ego2int, tar2int, rel_v, self.v, tar.v, front_flag ] )
+                            Front_id_list.append(
+                                [id_, ego2int, tar2int, rel_v, self.v, tar.v, front_flag])
 
         return Front_id_list
